@@ -1,9 +1,18 @@
 [tool.poetry]
 name = "trifle"
 version = "0.1.0"
-description = ""
+license = "MIT"
+description = "Generate docker images using Python"
 authors = ["Maxwell Koo <mjkoo90@gmail.com>"]
 readme = "README.md"
+homepage = "https://github.com/mjkoo/trifle"
+repository = "https://github.com/mjkoo/trifle"
+keywords = ["docker", "oci", "container", "build"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+]
 
 [tool.poetry.dependencies]
 python = "^3.11"
