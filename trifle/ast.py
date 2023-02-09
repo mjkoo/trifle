@@ -1,15 +1,21 @@
-# TODO: quote whitespace, line escapes, directives, type for image references, arg type with defaults
+# TODO:
+# - quote whitespace
+# - line escapes
+# - directives
+# - type for image references
+# - arg type with defaults
 
 from __future__ import annotations
 
-import functools
 import json
 import signal
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, cast
+
+from .utils import copy_callable_signature
 
 DEFAULT_SYNTAX = "docker.io/docker/dockerfile:experimental"
 DEFAULT_ESCAPE = "\\"
@@ -57,7 +63,7 @@ class BindMount(Mount):
         if self.from_:
             parts.append(f"from={self.from_}")
         if self.readwrite:
-            parts.append(f"rw")
+            parts.append("rw")
         return ",".join(parts)
 
 
@@ -86,7 +92,7 @@ class CacheMount(Mount):
         if self.from_:
             parts.append(f"from={self.from_}")
         if self.readonly:
-            parts.append(f"ro")
+            parts.append("ro")
         return ",".join(parts)
 
 
@@ -115,7 +121,7 @@ class SecretMount(Mount):
 
     def render(self) -> str:
         # TODO: Figure out a more ergonomic way to do this
-        if not self.id_ and not self.target:
+        if self.id_ is None or self.target is None:
             raise RuntimeError("At least one of id or target must be specified")
         id_ = self.id_ or self.target.name
         target = self.target or DEFAULT_SECRET_MOUNT_TARGET_ROOT / id_
@@ -170,10 +176,10 @@ class Security(Enum):
 
 @dataclass
 class RunInstruction(Instruction):
-    mounts: list(Mount) = field(default_factory=list)
+    mounts: list[Mount] = field(default_factory=list)
     network: Network = Network.DEFAULT
     security: Security = Security.SANDBOX
-    command: str | list(str) = field(default_factory=list)
+    command: str | list[str] = cast(list[str], field(default_factory=list))
 
     def render(self) -> str:
         parts = ["RUN"]
@@ -189,7 +195,7 @@ class RunInstruction(Instruction):
 
 @dataclass
 class CmdInstruction(Instruction):
-    command: str | list(str) = field(default_factory=list)
+    command: str | list[str] = cast(list[str], field(default_factory=list))
 
     def render(self) -> str:
         parts = ["CMD"]
@@ -203,7 +209,7 @@ class CmdInstruction(Instruction):
 
 @dataclass
 class LabelInstruction(Instruction):
-    labels: dict(str, str) = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
 
     def render(self) -> str:
         if not self.labels:
@@ -229,7 +235,7 @@ class ExposeInstruction(Instruction):
 
 @dataclass
 class EnvInstruction(Instruction):
-    env: dict(str, str) = field(default_factory=dict)
+    env: dict[str, str] = field(default_factory=dict)
 
     def render(self) -> str:
         if not self.env:
@@ -278,7 +284,7 @@ class CopyInstruction(Instruction):
 
 @dataclass
 class EntrypointInstruction(Instruction):
-    entrypoint: str | list(str) = field(default_factory=list)
+    entrypoint: str | list[str] = cast(list[str], field(default_factory=list))
 
     def render(self) -> str:
         parts = ["ENTRYPOINT"]
@@ -292,7 +298,7 @@ class EntrypointInstruction(Instruction):
 
 @dataclass
 class VolumeInstruction(Instruction):
-    volumes: str | list(str) = field(default_factory=list)
+    volumes: str | list[str] = cast(list[str], field(default_factory=list))
 
     def render(self) -> str:
         parts = ["VOLUME"]
@@ -352,7 +358,7 @@ class OnBuildInstruction(Instruction):
 
 @dataclass
 class StopSignalInstruction(Instruction):
-    signal: int | str | signal.signal = DEFAULT_STOP_SIGNAL
+    signal: int | str | signal.Signals = DEFAULT_STOP_SIGNAL
 
     def render(self) -> str:
         parts = ["STOPSIGNAL", f"{self.signal}"]
@@ -361,7 +367,7 @@ class StopSignalInstruction(Instruction):
 
 @dataclass
 class HealthCheckInstruction(Instruction):
-    command: str | list(str) | None
+    command: str | list[str] | None
     interval: int = DEFAULT_HEALTH_CHECK_INTERVAL
     timeout: int = DEFAULT_HEALTH_CHECK_TIMEOUT
     start_period: int = DEFAULT_HEALTH_CHECK_START_PERIOD
@@ -389,7 +395,7 @@ class HealthCheckInstruction(Instruction):
 
 @dataclass
 class ShellInstruction(Instruction):
-    shell: str | list(str) = field(default_factory=list)
+    shell: str | list[str] = cast(list[str], field(default_factory=list))
 
     def render(self) -> str:
         parts = ["SHELL"]
@@ -406,7 +412,7 @@ class Stage(Renderable):
     from_: str = DEFAULT_BASE_IMAGE
     platform: str = DEFAULT_PLATFORM
     alias: str | None = None
-    instructions: list(Instruction) = field(default_factory=list)
+    instructions: list[Instruction] = field(default_factory=list)
 
     def _from_instruction(self) -> str:
         parts = ["FROM", f"--platform={self.platform}", self.from_]
@@ -420,14 +426,15 @@ class Stage(Renderable):
         return "\n".join(parts)
 
 
+StageFunction = Callable[[Stage], None]
+
+
 @dataclass
 class Image(Renderable):
-    stages: dict(str, Stage | tuple[Stage, Callable[[Stage], None]]) = field(
-        default_factory=dict
-    )
+    stages: dict[str, Stage | tuple[StageFunction, Stage]] = field(default_factory=dict)
     syntax: str = DEFAULT_SYNTAX
     escape: str = DEFAULT_ESCAPE
-    directives: dict(str, str) = field(default_factory=dict)
+    directives: dict[str, str] = field(default_factory=dict)
     build_args: list[ArgInstruction] = field(default_factory=list)
 
     default_stage: str | None = None
@@ -442,21 +449,17 @@ class Image(Renderable):
             if isinstance(stage, Stage):
                 parts.append(stage.render())
             else:
-                stage, func = stage
+                func, stage = stage
                 func(stage)
                 parts.append(stage.render())
         return "\n".join(parts)
 
-    def stage(
-        self,
-        from_: str = DEFAULT_BASE_IMAGE,
-        platform: str = DEFAULT_PLATFORM,
-        alias: str | None = None,
-    ):
-        def wrapper(func):
-            stage = Stage(from_=from_, platform=platform, alias=alias)
+    @copy_callable_signature(Stage)
+    def stage(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+        def wrapper(func: StageFunction) -> None:
+            stage = Stage(*args, **kwargs)
             # TODO: Check for conflicting aliases, maybe introduce mapping to deconflict
-            self.stages[func.__name__] = (stage, func)
+            self.stages[func.__name__] = (func, stage)
             self.default_stage = func.__name__
 
         return wrapper
